@@ -5,13 +5,13 @@
 #include <ctype.h>
 
 typedef enum {
-    NODE_NULL,
+    NODE_NULL, // i.e. a dummy node
     NODE_LITERAL,
     NODE_SPECIAL_LITERAL,
     NODE_CHAR_CLASS,
     NODE_SEQUENCE,
     NODE_ALTERNATE,
-    NODE_REPEAT,
+    NODE_REPEAT, // i.e. ?, +, *, {...}
     NODE_ANY
 } regex_node_tag_t;
 
@@ -22,11 +22,11 @@ typedef enum {
     META_NON_DIGIT_CHAR,
     META_WHITESPACE_CHAR,
     META_NON_WHITESPACE_CHAR,
-
 } regex_special_literal_t;
 
 typedef struct regex_node_t {
     regex_node_tag_t tag;
+    // used for convenience during parsing
     struct regex_node_t *next;
 
     union {
@@ -42,6 +42,7 @@ typedef struct regex_node_t {
             int length;
         } char_class;
 
+        // for both NODE_SEQUENCE and NODE_ALTERNATE
         struct {
             struct regex_node_t **list;
             int length;
@@ -52,15 +53,8 @@ typedef struct regex_node_t {
             int min;
             int max;
         } repeat;
-
-        bool any;
     };
 } regex_node_t;
-
-void parse_error(const char *msg) {
-    printf("Oops: %s\n", msg);
-    exit(-1);
-}
 
 regex_node_t *regex_node_allocate(regex_node_tag_t tag) {
     regex_node_t *node = (regex_node_t *) malloc(sizeof(regex_node_t));
@@ -68,87 +62,80 @@ regex_node_t *regex_node_allocate(regex_node_tag_t tag) {
     return node;
 }
 
-regex_node_t *parse(const char **pattern) {
-    char c = **pattern;
+void regex_node_free(regex_node_t *node) { free(node); }
 
-    bool isalt = false;
+void parse_error(const char *msg) {
+    printf("Oops: %s\n", msg);
+    exit(-1);
+}
+
+regex_node_t *regex_parse(const char **pattern) {
+    // linked list of nodes in this sequence
     regex_node_t *head = regex_node_allocate(NODE_NULL);
     regex_node_t *current = head;
-    int length = 0;
+    int seqlength = 0;
 
+    char c = **pattern;
     while (c != '\0' && c != '|' && c != ')') {
-        length++;
+        *pattern = *pattern + 1; // consume it
 
-        *pattern = *pattern + 1;
-
+        regex_node_t *next = NULL;
         if (c == '(') {
-            regex_node_t *subexpr = parse(pattern);
+            next = regex_parse(pattern);
 
-            if (**pattern != ')') {
-                printf("actually got %c\n", **pattern);
-
-                parse_error("Expected ')'");
-            }
+            if (**pattern != ')') parse_error("Expected ')'");
             *pattern = *pattern + 1;
 
-            current->next = subexpr;
-            current = subexpr;
         } else if (isalpha(c) || isdigit(c)) {
-            regex_node_t *node = regex_node_allocate(NODE_LITERAL);
-            node->literal.str = *pattern - 1;
-            node->literal.length = 1;
+            next = regex_node_allocate(NODE_LITERAL);
+            next->literal.str = *pattern - 1;
+            next->literal.length = 1;
 
-            current->next = node;
-            current = node;
         } else if (c == '.') {
-            regex_node_t *node = regex_node_allocate(NODE_ANY);
+            next = regex_node_allocate(NODE_ANY);
 
-            current->next = node;
-            current = node;
         } else if (c == '?' || c == '*' || c == '+') {
-            if (current->tag == NODE_NULL || current->tag == NODE_REPEAT) {
+            if (current->tag == NODE_NULL || current->tag == NODE_REPEAT)
                 parse_error("Cannot use repetition here");
-            }
 
             regex_node_t *el = regex_node_allocate(NODE_NULL);
             *el = *current; // copy current node
 
-            current->tag = NODE_REPEAT;
+            current->tag = NODE_REPEAT; // change current into a repeat node
             current->repeat.el = el;
 
             if (c == '?') { current->repeat.min = 0; current->repeat.max = 1; }
             if (c == '*') { current->repeat.min = 0; current->repeat.max = -1; }
             if (c == '+') { current->repeat.min = 1; current->repeat.max = -1; }
-
-            length--; // we didn't actually push a new node
         }
 
-        c = **pattern;
-    }
+        if (next != NULL) { // did we add to the sequence?
+            seqlength++;
+            current->next = next;
+            current = next;
+        }
 
+        c = **pattern; // peek
+    }
     
-    head = head->next; // get rid of the null
-    regex_node_t **nodes = (regex_node_t **) malloc(length * sizeof(regex_node_t *));
+    regex_node_t *seq = regex_node_allocate(NODE_SEQUENCE);
+    seq->sequence.length = seqlength;
+    seq->sequence.list = (regex_node_t **) malloc(seqlength * sizeof(regex_node_t *));
 
+    head = head->next; // get rid of the null node
     for (int i = 0; head != NULL; i++, head = head->next) {
-        nodes[i] = head;
+        seq->sequence.list[i] = head;
     }
 
-    regex_node_t *seq = regex_node_allocate(NODE_SEQUENCE);
-    seq->sequence.length = length;
-    seq->sequence.list = nodes;
+    if (c == '|') { // make things simple: only two alternatives per node
+        *pattern = *pattern + 1; // consume it
 
-    if (c == '|') {
         regex_node_t *alt = regex_node_allocate(NODE_ALTERNATE);
-        regex_node_t **alts = (regex_node_t **) malloc(2 * sizeof(regex_node_t *));
-
-        alts[0] = seq;
-
-        *pattern = *pattern + 1;
-        alts[1] = parse(pattern);
-
         alt->sequence.length = 2;
-        alt->sequence.list = alts;
+        alt->sequence.list = (regex_node_t **) malloc(2 * sizeof(regex_node_t *));
+
+        alt->sequence.list[0] = seq;
+        alt->sequence.list[1] = regex_parse(pattern);
 
         return alt;
     }
@@ -175,16 +162,19 @@ void print_node(regex_node_t *node) {
         print_node(node->repeat.el);
         if (node->repeat.min == 0 && node->repeat.max == 1)
             printf("?");
-        if (node->repeat.min == 0 && node->repeat.max == -1)
+        else if (node->repeat.min == 0 && node->repeat.max == -1)
             printf("*");
-        if (node->repeat.min == 1 && node->repeat.max == -1)
+        else if (node->repeat.min == 1 && node->repeat.max == -1)
             printf("+");
     }
 }
 
+// remove sequence nodes with a single child
 regex_node_t *eliminate_single_seqs(regex_node_t *node) {
     if (node->tag == NODE_SEQUENCE && node->sequence.length == 1) {
-        return node->sequence.list[0];
+        regex_node_t *ret = node->sequence.list[0];
+        free(node);
+        return ret;
     }
 
     if (node->tag == NODE_SEQUENCE || node->tag == NODE_ALTERNATE) {
@@ -211,7 +201,7 @@ void test(const char *pattern) {
     
     const char *pat = pattern;
 
-    regex_node_t *node = parse(&pat);
+    regex_node_t *node = regex_parse(&pat);
     node = eliminate_single_seqs(node);
 
     printf(" > Reconstructed: ");
@@ -221,6 +211,7 @@ void test(const char *pattern) {
 
 int main(int argc, char **argv) {
 
+    test("");
     test("123");
     test("1(2)3");
     test("a|b");
@@ -231,7 +222,7 @@ int main(int argc, char **argv) {
     test("1+");
     test("1?");
     test("1*(124)+");
-    //test("123()");
+    test("123(abcd+)");
 
     return 0;
 }
