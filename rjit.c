@@ -4,58 +4,6 @@
 #include <stdio.h>
 #include <ctype.h>
 
-typedef enum {
-    NODE_NULL, // i.e. a dummy node
-    NODE_LITERAL,
-    NODE_SPECIAL_LITERAL,
-    NODE_CHAR_CLASS,
-    NODE_SEQUENCE,
-    NODE_ALTERNATE,
-    NODE_REPEAT, // i.e. ?, +, *, {...}
-    NODE_ANY
-} regex_node_tag_t;
-
-typedef enum {
-    META_WORD_CHAR,
-    META_NON_WORD_CHAR,
-    META_DIGIT_CHAR,
-    META_NON_DIGIT_CHAR,
-    META_WHITESPACE_CHAR,
-    META_NON_WHITESPACE_CHAR,
-} regex_special_literal_t;
-
-typedef struct regex_node_t {
-    regex_node_tag_t tag;
-    // used for convenience during parsing
-    struct regex_node_t *next;
-
-    union {
-        struct {
-            const char *str;
-            int length;
-        } literal;
-
-        struct {
-            bool invert;
-            const char *char_starts;
-            const char *char_ends;
-            int length;
-        } char_class;
-
-        // for both NODE_SEQUENCE and NODE_ALTERNATE
-        struct {
-            struct regex_node_t **list;
-            int length;
-        } sequence;
-
-        struct {
-            struct regex_node_t *el;
-            int min;
-            int max;
-        } repeat;
-    };
-} regex_node_t;
-
 regex_node_t *regex_node_allocate(regex_node_tag_t tag) {
     regex_node_t *node = (regex_node_t *) malloc(sizeof(regex_node_t));
     node->tag = tag;
@@ -143,36 +91,10 @@ regex_node_t *regex_parse(const char **pattern) {
     return seq;
 }
 
-void print_node(regex_node_t *node) {
-    if (node->tag == NODE_LITERAL) {
-        printf("%.*s", node->literal.length, node->literal.str);
-    } else if (node->tag == NODE_ANY) {
-        printf(".");
-    } else if (node->tag == NODE_SEQUENCE || node->tag == NODE_ALTERNATE) {
-        printf("(");
-
-        for (int i = 0; i < node->sequence.length; i++) {
-            print_node(node->sequence.list[i]);
-            if (node->tag == NODE_ALTERNATE && i != node->sequence.length - 1)
-                printf("|");
-        }
-
-        printf(")");
-    } else if (node->tag == NODE_REPEAT) {
-        print_node(node->repeat.el);
-        if (node->repeat.min == 0 && node->repeat.max == 1)
-            printf("?");
-        else if (node->repeat.min == 0 && node->repeat.max == -1)
-            printf("*");
-        else if (node->repeat.min == 1 && node->repeat.max == -1)
-            printf("+");
-    }
-}
-
 // remove sequence nodes with a single child
 regex_node_t *eliminate_single_seqs(regex_node_t *node) {
     if (node->tag == NODE_SEQUENCE && node->sequence.length == 1) {
-        regex_node_t *ret = node->sequence.list[0];
+        regex_node_t *ret = eliminate_single_seqs(node->sequence.list[0]);
         free(node);
         return ret;
     }
@@ -187,6 +109,48 @@ regex_node_t *eliminate_single_seqs(regex_node_t *node) {
     return node;
 }
 
+void compress_literals(regex_node_t *node) {
+    if (node->tag == NODE_SEQUENCE) {
+        regex_node_t *curr = NULL;
+        for (int i = 0; i < node->sequence.length; i++) {
+            regex_node_t *el = node->sequence.list[i];
+            compress_literals(el);
+            if (el->tag == NODE_LITERAL) {
+                if (curr == NULL) {
+                    curr = el;
+                } else {
+                    // curr ends at el's start
+                    if (curr->literal.str + curr->literal.length == el->literal.str) {
+                        curr->literal.length += el->literal.length;
+                        el->tag = NODE_NULL; // this should be deleted
+                    } else {
+                        curr = el;
+                    }
+                }
+            } else {
+                curr = NULL;
+            }
+        }
+
+        // delete the null nodes
+        int idx = 0;
+        for (int i = 0; i < node->sequence.length; i++) {
+            if (node->sequence.list[i]->tag == NODE_NULL) {
+                regex_node_free(node->sequence.list[i]);
+            } else {
+                node->sequence.list[idx++] = node->sequence.list[i];
+            }
+        }
+        node->sequence.length = idx;
+    } else if (node->tag == NODE_ALTERNATE) {
+        for (int i = 0; i < node->sequence.length; i++)
+            compress_literals(node->sequence.list[i]);
+    } else if (node->tag == NODE_REPEAT) {
+        compress_literals(node->repeat.el);
+    }
+
+}
+
 regex_node_t *collapse_alts(regex_node_t *node) {
     // blah
     return NULL;
@@ -196,6 +160,132 @@ match_fn_t regex_compile(const char *pattern) {
     return NULL;
 }
 
+int create_label(vm_program_t *prog, int offset) {
+    int label = prog->current_label;
+    prog->current_label++;
+
+    prog->label_table[label] = prog->insts_length + offset;
+
+    return label;
+}
+
+int add_inst(vm_program_t *prog, vm_inst_t inst) {
+    if (prog->insts_length == prog->insts_capacity) exit(-1);
+
+    int index = prog->insts_length;
+    prog->insts[index] = inst;
+    prog->insts_length++;
+
+    return index;
+}
+
+void emit_node(vm_program_t *prog, regex_node_t *node) {
+    vm_inst_t inst;
+
+    if (node->tag == NODE_LITERAL) {
+        inst.op = OP_LITERAL;
+        inst.literal.str    = node->literal.str;
+        inst.literal.length = node->literal.length;
+        add_inst(prog, inst);
+
+    } else if (node->tag == NODE_ANY) {
+        inst.op = OP_ANY;
+        add_inst(prog, inst);
+
+    } else if (node->tag == NODE_SEQUENCE) {
+        for (int i = 0; i < node->sequence.length; i++)
+            emit_node(prog, node->sequence.list[i]);
+
+    } else if (node->tag == NODE_ALTERNATE) {
+        inst.op = OP_SPLIT;
+        int split_idx = add_inst(prog, inst);
+
+        int alt1_label = create_label(prog, 0);
+        emit_node(prog, node->sequence.list[0]);
+
+        inst.op = OP_JMP;
+        int jmp_idx = add_inst(prog, inst);
+
+        int alt2_label = create_label(prog, 0);
+        emit_node(prog, node->sequence.list[1]);
+
+        // fix up labels
+        int jmp_label = create_label(prog, 0);
+        prog->insts[jmp_idx].jmp_label = jmp_label;
+
+        prog->insts[split_idx].split.label_1 = alt1_label;
+        prog->insts[split_idx].split.label_2 = alt2_label;
+
+    } else if (node->tag == NODE_REPEAT) {
+        if (node->repeat.min == 0 && node->repeat.max == 1) { // '?'
+            inst.op = OP_SPLIT;
+            int split_idx = add_inst(prog, inst);
+
+            int lab1 = create_label(prog, 0);
+            emit_node(prog, node->repeat.el);
+
+            int lab2 = create_label(prog, 0);
+
+            // fix up labels
+            prog->insts[split_idx].split.label_1 = lab1;
+            prog->insts[split_idx].split.label_2 = lab2;
+
+        } else if (node->repeat.min == 0 && node->repeat.max == -1) { // '*'
+            int L1 = create_label(prog, 0);
+            inst.op = OP_SPLIT;
+            int split_idx = add_inst(prog, inst);
+
+            int L2 = create_label(prog, 0);
+            emit_node(prog, node->repeat.el);
+
+            inst.op = OP_JMP;
+            inst.jmp_label = L1;
+            add_inst(prog, inst);
+
+            int L3 = create_label(prog, 0);
+    
+            // fix up labels
+            prog->insts[split_idx].split.label_1 = L2;
+            prog->insts[split_idx].split.label_2 = L3;
+
+        } else if (node->repeat.min == 1 && node->repeat.max == -1) {
+            int L1 = create_label(prog, 0);
+            emit_node(prog, node->repeat.el);
+
+            inst.op = OP_SPLIT;
+            int split_idx = add_inst(prog, inst);
+
+            int L3 = create_label(prog, 0);
+
+            // fix up labels
+            prog->insts[split_idx].split.label_1 = L1;
+            prog->insts[split_idx].split.label_2 = L3;
+        } else {
+            printf("unsupported repetition\n");
+            exit(-1);
+        }
+    }
+}
+
+vm_program_t *regex_compile_bytecode(const char *pattern) {
+    const char *input = pattern;
+    regex_node_t *node = regex_parse(&input);
+
+    vm_program_t *prog = malloc(sizeof(vm_program_t));
+    prog->insts_capacity = 1000;
+    prog->insts_length = 0;
+    prog->insts = malloc(prog->insts_capacity * sizeof(vm_inst_t));
+
+    prog->label_table = malloc(prog->insts_capacity * sizeof(int));
+    prog->current_label = 0;
+
+    emit_node(prog, node);
+    // terminate with a match inst
+    add_inst(prog, (vm_inst_t){.op = OP_MATCH});
+    
+    return prog;
+}
+
 void test(const char *pattern) {
     printf("Test pattern: %s\n", pattern);
     
@@ -203,10 +293,12 @@ void test(const char *pattern) {
 
     regex_node_t *node = regex_parse(&pat);
     node = eliminate_single_seqs(node);
+    compress_literals(node);
 
     printf(" > Reconstructed: ");
     print_node(node);
     printf("\n");
+    print_node_tree(node, 0);
 }
 
 int main(int argc, char **argv) {
@@ -223,6 +315,22 @@ int main(int argc, char **argv) {
     test("1?");
     test("1*(124)+");
     test("123(abcd+)");
+    test("(hello(xyz)world)");
+
+    vm_program_t prog;
+    prog.insts = (vm_inst_t*) malloc(200 * sizeof(vm_inst_t));
+    prog.insts_length = 0;
+    prog.insts_capacity = 200;
+    prog.label_table = (int*) malloc(200 * sizeof(int));
+    prog.current_label = 0;
+
+    const char *pat = "ab((c|d))+";
+    regex_node_t *node = regex_parse(&pat);
+    emit_node(&prog, node);
+
+    add_inst(&prog, (vm_inst_t){.op = OP_MATCH});
+
+    print_program(&prog);
 
     return 0;
 }
