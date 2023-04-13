@@ -64,9 +64,16 @@ void vm2arm(vm_program_t *vp, arm_program_t *ap) {
 
     fprintf(f, "mov x10, x0\n");
     fprintf(f, "mov x11, #0\n");
+    fprintf(f, "mov x15, sp\n"); // thread stack
 
     for (int idx = 0; idx < vp->insts_length; idx++) {
         vm_inst_t vi = vp->insts[idx];
+
+        for (int label_idx = 0; label_idx < vp->current_label; label_idx++) {
+            if (vp->label_table[label_idx] == idx) {
+                fprintf(f, "RL_%d:\n", label_idx);
+            }
+        }
 
         if (vi.op == OP_LITERAL) {
             char chr = vi.literal.str[0];
@@ -79,13 +86,32 @@ void vm2arm(vm_program_t *vp, arm_program_t *ap) {
             fprintf(f, "ldrb w9, [x10, x11]\n");
             fprintf(f, "cbz w9, MATCH\n");
             fprintf(f, "b NOMATCH\n");
+        } else if (vi.op == OP_JMP) {
+            fprintf(f, "b RL_%d\n", vi.jmp_label);
+        } else if (vi.op == OP_SPLIT) {
+            fprintf(f, "adr x13, RL_%d\n", vi.split.label_1);
+            fprintf(f, "adr x14, RL_%d\n", vi.split.label_2);
+            fprintf(f, "b AddAThread\n");
+
         } else {
             printf("Unsupported\n");
-            exit(-1);
+            //exit(-1);
         }
     }
 
+    fprintf(f, "AddAThread:\n");
+    fprintf(f, "sub x15, x15, #16\n");
+    fprintf(f, "stp x14, x11, [x15]\n");
+    fprintf(f, "br x13\n");
+
+    fprintf(f, "RunAThread:\n");
+    fprintf(f, "ldp x14, x11, [x15]\n");
+    fprintf(f, "add x15, x15, #16\n");
+    fprintf(f, "br x14\n");
+
     fprintf(f, "NOMATCH:\n");
+    fprintf(f, "cmp sp, x15\n");
+    fprintf(f, "b.ne RunAThread\n");
     fprintf(f, "mov x12, #0\n");
     fprintf(f, "b FIN\n");
 

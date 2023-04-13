@@ -325,7 +325,7 @@ int main(int argc, char **argv) {
     test("123(abcd+)");
     test("(hello(xyz)world)");
 
-    vm_program_t *prog = regex_compile_bytecode("helloworld");
+    vm_program_t *prog = regex_compile_bytecode("hell(o|a)world");
     print_program(prog);
 
     arm_program_t arm;
@@ -365,7 +365,7 @@ int main(int argc, char **argv) {
 
     jitfunc fn = (jitfunc) data;
     
-    const char *pp = "helloworl";
+    const char *pp = "hellaworld";
     bool answer = fn(pp);
 
     printf("drumroll... %d\n", answer);
