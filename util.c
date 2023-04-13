@@ -2,6 +2,9 @@
 
 #include <stdio.h>
 #include <sys/mman.h>
+#include <string.h>
+#include <errno.h>
+#include <stdlib.h>
 
 void print_node(regex_node_t *node) {
     if (node->tag == NODE_LITERAL) {
@@ -76,5 +79,12 @@ void print_program(vm_program_t *prog) {
 }
 
 void *executable_mem(int size) {
-    return mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON, -1, 0);
+    void *res = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
+
+    if (res == MAP_FAILED) {
+        printf("mmap failed!: %s\n", strerror(errno));
+        exit(-1);
+    }
+    return res;
 }

@@ -1,4 +1,6 @@
 #include <stdbool.h>
+#include <inttypes.h>
+#include <stdio.h>
 
 typedef bool (*match_fn_t)(const char *str);
 
@@ -98,3 +100,18 @@ void print_node_tree(regex_node_t *node, int level);
 void print_program(vm_program_t *prog);
 
 void *executable_mem(int size);
+
+
+typedef int reg_t;
+typedef uint32_t arm_inst_t;
+
+typedef struct {
+    arm_inst_t *insts;
+    int index;
+
+    FILE *f;
+
+    int *label_table;
+} arm_program_t;
+
+void vm2arm(vm_program_t *vp, arm_program_t *ap);

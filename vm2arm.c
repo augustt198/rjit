@@ -1,6 +1,5 @@
 #include "rjit.h"
 
-#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -21,16 +20,6 @@
 
 #define LABEL_NOMATCH 1
 #define LABEL_MATCH 2
-
-
-typedef int reg_t;
-typedef uint32_t arm_inst_t;
-
-typedef struct {
-    arm_inst_t *insts;
-    int index;
-
-} arm_program_t;
 
 arm_inst_t arm_ldr_reg(reg_t base, reg_t offset, reg_t dest) {
     return 0xf8600800 | (base << 5) | (offset << 16) | (dest << 0);
@@ -66,23 +55,47 @@ int insert(arm_program_t *prog, arm_inst_t inst) {
 }
 
 void vm2arm(vm_program_t *vp, arm_program_t *ap) {
+    FILE *f = ap->f;
+
+    fprintf(f, "_matchit:\n");
+
+    fprintf(f, "sub sp, sp, #64\n");
+    fprintf(f, "stp x29, x30, [sp, #48]\n");
+
+    fprintf(f, "mov x10, x0\n");
+    fprintf(f, "mov x11, #0\n");
+
     for (int idx = 0; idx < vp->insts_length; idx++) {
         vm_inst_t vi = vp->insts[idx];
 
         if (vi.op == OP_LITERAL) {
             char chr = vi.literal.str[0];
-            insert(ap, arm_ldr_reg(REG_SPTR, REG_IDX, REG_CHAR));
-            insert(ap, arm_sub_imm(REG_CHAR, (int) chr, REG_CHAR));
-            insert(ap, arm_b_cond(LABEL_NOMATCH, COND_NE));
-            insert(ap, arm_add_imm(REG_IDX, 1, REG_IDX));
+            fprintf(f, "ldrb w9, [x10, x11]\n");
+            fprintf(f, "subs x9, x9, #%d\n", (int) chr);
+            fprintf(f, "b.ne NOMATCH\n");
+            fprintf(f, "add x11, x11, #1\n");
 
         } else if (vi.op == OP_MATCH) {
-            insert(ap, arm_sub_reg(REG_IDX, REG_LEN, REG_CMPRES));
-            insert(ap, arm_b_cond(LABEL_MATCH, COND_EQ));
-            insert(ap, arm_b(LABEL_NOMATCH));
+            fprintf(f, "ldrb w9, [x10, x11]\n");
+            fprintf(f, "cbz w9, MATCH\n");
+            fprintf(f, "b NOMATCH\n");
         } else {
             printf("Unsupported\n");
             exit(-1);
         }
     }
+
+    fprintf(f, "NOMATCH:\n");
+    fprintf(f, "mov x12, #0\n");
+    fprintf(f, "b FIN\n");
+
+    fprintf(f, "MATCH:\n");
+    fprintf(f, "mov x12, #1\n");
+    fprintf(f, "b FIN\n");
+
+    fprintf(f, "FIN:\n");
+    fprintf(f, "ldp x29, x30, [sp, #48]\n");
+    fprintf(f, "add sp, sp, #64\n");
+    fprintf(f, "mov x0, x12\n");
+    fprintf(f, "ret\n");
 }

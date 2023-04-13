@@ -301,8 +301,16 @@ void test(const char *pattern) {
     print_node_tree(node, 0);
 }
 
-int main(int argc, char **argv) {
+#include <sys/mman.h>
+#include <string.h>
+#include <errno.h>
 
+#include <pthread.h>
+#include <libkern/OSCacheControl.h>
+
+typedef bool (*jitfunc)(const char *str);
+
+int main(int argc, char **argv) {
     test("");
     test("123");
     test("1(2)3");
@@ -317,20 +325,50 @@ int main(int argc, char **argv) {
     test("123(abcd+)");
     test("(hello(xyz)world)");
 
-    vm_program_t prog;
-    prog.insts = (vm_inst_t*) malloc(200 * sizeof(vm_inst_t));
-    prog.insts_length = 0;
-    prog.insts_capacity = 200;
-    prog.label_table = (int*) malloc(200 * sizeof(int));
-    prog.current_label = 0;
+    vm_program_t *prog = regex_compile_bytecode("helloworld");
+    print_program(prog);
 
-    const char *pat = "ab((c|d))+";
-    regex_node_t *node = regex_parse(&pat);
-    emit_node(&prog, node);
+    arm_program_t arm;
+    arm.index = 0;
 
-    add_inst(&prog, (vm_inst_t){.op = OP_MATCH});
+    arm.f = fopen("asm/foo.s", "w");
+    vm2arm(prog, &arm);
+    fclose(arm.f);
 
-    print_program(&prog);
+    system("clang asm/foo.s -c -o asm/foo.o");
+
+    system("otool -tX asm/foo.o > asm/foo.txt");
+
+    FILE *text = fopen("asm/foo.txt", "r");
+
+    uint32_t *data = executable_mem(4096);
+
+    pthread_jit_write_protect_np(0);
+    sys_icache_invalidate(data, 4096);
+
+    int addr = 0;
+    uint64_t saddr;
+    uint32_t b1, b2, b3, b4;
+    int res;
+    while ((res = fscanf(text, "%llx %x %x %x %x\n", &saddr, &b1, &b2, &b3, &b4)) > 1) {
+        if (res >= 2) data[addr++] = b1;
+        if (res >= 3) data[addr++] = b2;
+        if (res >= 4) data[addr++] = b3;
+        if (res >= 5) data[addr++] = b4;
+    }
+
+    printf("the first %x\n", data[0]);
+    printf("the last %x\n", data[addr - 1]);
+
+    pthread_jit_write_protect_np(1);
+    sys_icache_invalidate(data, 4096);
+
+    jitfunc fn = (jitfunc) data;
+    
+    const char *pp = "helloworl";
+    bool answer = fn(pp);
+
+    printf("drumroll... %d\n", answer);
 
     return 0;
 }
