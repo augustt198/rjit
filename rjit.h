@@ -115,3 +115,5 @@ typedef struct {
 } arm_program_t;
 
 void vm2arm(vm_program_t *vp, arm_program_t *ap);
+
+bool vm_run(vm_program_t *prog, const char *str);

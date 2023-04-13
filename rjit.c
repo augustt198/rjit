@@ -325,7 +325,7 @@ int main(int argc, char **argv) {
     test("123(abcd+)");
     test("(hello(xyz)world)");
 
-    vm_program_t *prog = regex_compile_bytecode("hell(o|a)world");
+    vm_program_t *prog = regex_compile_bytecode("hello+world");
     print_program(prog);
 
     arm_program_t arm;
@@ -365,10 +365,20 @@ int main(int argc, char **argv) {
 
     jitfunc fn = (jitfunc) data;
     
-    const char *pp = "hellaworld";
+    const char *pp = "helloooooooworld";
     bool answer = fn(pp);
 
     printf("drumroll... %d\n", answer);
+
+    const char *pp2 = "helloooooooooooooooooooooooxworld";
+    bool vm_answer = vm_run(prog, pp2);
+    printf("vm answer... %d\n", vm_answer);
+
+    vm_program_t *prog2 = regex_compile_bytecode("(a|b|c|d|e|f|h|p|q|r|s|t)+");
+
+    const char *ff = "abcabcbabacacbcbbcabcbabcabacacbcbbcabcbabcabaccacbcbbcabcbabcabaccacbcbbcabcbabcabaccacbcbbcabcbabcabaccbabaccbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbacbcbbcababacacbcbbcabbbcabacacbcbbcabbbcababacacbcbbcabbbcababacacabacacbcbbcabbbcababacacbcbbcabbbcababacacabacacbcbbcabbbcababacacbcbbcabbbcababacacabacacbcbbcabbbcababacacbcbbcabbbcababacacabacacbcbbcabbbcababacacbcbbcabbbcababacacababacacbcbbcabbbcababacacbcbbcabbbcababacacbcbbcababaaacbcbbcababacacbcbbcabababacacbcbbcabcbabbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababcabacbabacacbcbbcababacacbcbbbcbabcabacbabacacbcbbcababacacbcbb";
+    print_program(prog2);
+    //printf("vm answer... %d\n", vm_run(prog2, ff));
 
     return 0;
 }

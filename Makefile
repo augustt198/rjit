@@ -1,2 +1,2 @@
 all:
-	clang -Wall -ggdb3 rjit.c util.c vm2arm.c -o rjit
+	clang -Wall -ggdb3 rjit.c util.c vm2arm.c vmsim.c -o rjit
