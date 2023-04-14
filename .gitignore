@@ -1,2 +1,5 @@
 rjit
 rjit.dSYM
+
+.DS_Store
+.vscode/
