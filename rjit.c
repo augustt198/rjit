@@ -362,9 +362,9 @@ int main(int argc, char **argv) {
     test("123(abcd+)");
     test("(hello(xyz)world)");
 
-    match_fn_t fn = regex_compile("(hello|world)+(1|2)*");
+    match_fn_t fn = regex_compile(".*(hello|world).*");
 
-    const char *pp = "hellohelloworldworldhello1111221212221";
+    const char *pp = "xyxyxyxhelloworldhelloabababa";
     bool answer = fn(pp);
 
     printf("drumroll... %d\n", answer);

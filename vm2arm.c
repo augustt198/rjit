@@ -77,7 +77,9 @@ void vm2arm(vm_program_t *vp, arm_program_t *ap) {
 
     // set up SP
     fprintf(f, "sub sp, sp, #%d\n", sp_sub);
-    fprintf(f, "stp x29, x30, [sp, #%d]\n", sp_sub - 16);
+    //fprintf(f, "stp x29, x30, [sp, #%d]\n", sp_sub - 16);
+    fprintf(f, "str x29, [sp, #%d]\n", sp_sub-16); // offset can be too large for stp
+    fprintf(f, "str x30, [sp, #%d]\n", sp_sub-8);
 
     // initialize our regs
     fprintf(f, "mov " REG_SPTR ", x0\n");
@@ -148,17 +150,20 @@ void vm2arm(vm_program_t *vp, arm_program_t *ap) {
         }
         fprintf(f, "bytecode_inst_%d:\n", idx);
 
-        if (vi.op == OP_LITERAL) {
-            char chr = vi.literal.str[0];
-            // assume char is already loaded
-            //fprintf(f, "ldrb " REGW_CHAR ", [" REG_SPTR ", " REG_SIDX "]\n");
-            fprintf(f, "cmp " REG_CHAR ", #%d\n", (int) chr);
-            fprintf(f, "b.ne bytecode_instr_done\n");
-            fprintf(f, "ldrh " REGW_TMP ", [" REG_HIST_BASE ", #%d]\n", idx*8 + 4);
+        if (vi.op == OP_LITERAL || vi.op == OP_ANY) {
+            if (vi.op == OP_LITERAL) {
+                char chr = vi.literal.str[0];
+                // assume char is already loaded
+                //fprintf(f, "ldrb " REGW_CHAR ", [" REG_SPTR ", " REG_SIDX "]\n");
+                fprintf(f, "cmp " REG_CHAR ", #%d\n", (int) chr);
+                fprintf(f, "b.ne bytecode_instr_done\n");
+            }
+
+            fprintf(f, "ldrh " REGW_TMP ", [" REG_HIST_BASE ", #%d]\n", (idx+1)*8 + 4);
             fprintf(f, "cmp " REG_TMP ", " REG_SIDX "\n");
             fprintf(f, "b.eq bytecode_instr_done\n"); // this was already on the stack
             // or make these conditional instead of branching?
-            fprintf(f, "strh " REGW_SIDX ", [" REG_HIST_BASE ", #%d]\n", idx*8 + 4);
+            fprintf(f, "strh " REGW_SIDX ", [" REG_HIST_BASE ", #%d]\n", (idx+1)*8 + 4);
             fprintf(f, "adr " REG_TMP ", bytecode_inst_%d\n", idx+1);
             fprintf(f, "str " REG_TMP ", [" REG_NEXT_BASE ", " REG_NEXT_IDX ", sxtx #3]\n");
             fprintf(f, "add " REG_NEXT_IDX ", " REG_NEXT_IDX ", #1\n");
@@ -219,7 +224,9 @@ void vm2arm(vm_program_t *vp, arm_program_t *ap) {
 
     fprintf(f, "FIN:\n");
     // restore SP
-    fprintf(f, "ldp x29, x30, [sp, #%d]\n", sp_sub - 16);
+    // fprintf(f, "ldp x29, x30, [sp, #%d]\n", sp_sub - 16);
+    fprintf(f, "ldr x29, [sp, #%d]\n", sp_sub-16);
+    fprintf(f, "ldr x30, [sp, #%d]\n", sp_sub-8);
     fprintf(f, "add sp, sp, #%d\n", sp_sub);
     fprintf(f, "ret\n");
 }
