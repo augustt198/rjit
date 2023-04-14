@@ -325,7 +325,7 @@ int main(int argc, char **argv) {
     test("123(abcd+)");
     test("(hello(xyz)world)");
 
-    vm_program_t *prog = regex_compile_bytecode("hello+world");
+    vm_program_t *prog = regex_compile_bytecode("(hello|world)+(1|2)*");
     print_program(prog);
 
     arm_program_t arm;
@@ -336,7 +336,6 @@ int main(int argc, char **argv) {
     fclose(arm.f);
 
     system("clang asm/foo.s -c -o asm/foo.o");
-
     system("otool -tX asm/foo.o > asm/foo.txt");
 
     FILE *text = fopen("asm/foo.txt", "r");
@@ -364,21 +363,11 @@ int main(int argc, char **argv) {
     sys_icache_invalidate(data, 4096);
 
     jitfunc fn = (jitfunc) data;
-    
-    const char *pp = "helloooooooworld";
+
+    const char *pp = "hellohelloworldworld1111221212221";
     bool answer = fn(pp);
 
     printf("drumroll... %d\n", answer);
-
-    const char *pp2 = "helloooooooooooooooooooooooxworld";
-    bool vm_answer = vm_run(prog, pp2);
-    printf("vm answer... %d\n", vm_answer);
-
-    vm_program_t *prog2 = regex_compile_bytecode("(a|b|c|d|e|f|h|p|q|r|s|t)+");
-
-    const char *ff = "abcabcbabacacbcbbcabcbabcabacacbcbbcabcbabcabaccacbcbbcabcbabcabaccacbcbbcabcbabcabaccacbcbbcabcbabcabaccbabaccbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbcbbcabbbcabacacbcbbcabbacbcbbcababacacbcbbcabbbcabacacbcbbcabbbcababacacbcbbcabbbcababacacabacacbcbbcabbbcababacacbcbbcabbbcababacacabacacbcbbcabbbcababacacbcbbcabbbcababacacabacacbcbbcabbbcababacacbcbbcabbbcababacacabacacbcbbcabbbcababacacbcbbcabbbcababacacababacacbcbbcabbbcababacacbcbbcabbbcababacacbcbbcababaaacbcbbcababacacbcbbcabababacacbcbbcabcbabbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababbcababaaacbcbbcababacacbcbbcababababcabacbabacacbcbbcababacacbcbbbcbabcabacbabacacbcbbcababacacbcbb";
-    print_program(prog2);
-    //printf("vm answer... %d\n", vm_run(prog2, ff));
 
     return 0;
 }

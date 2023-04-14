@@ -3,11 +3,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define REG_IDX 3
-#define REG_SPTR 4
-#define REG_CHAR 5
-#define REG_CMPRES 6
-#define REG_LEN 7
+#define REG_TMP2 "x3"
+#define REG_TMP "x4"
+#define REGW_TMP "w4"
+#define REG_SPTR "x5"
+#define REG_SIDX "x6"
+#define REGW_SIDX "w6"
+#define REG_CHAR "x7"
+#define REGW_CHAR "w7"
+#define REG_CURR_BASE "x8"
+#define REG_CURR_LEN "x9"
+#define REG_CURR_IDX "x10"
+#define REG_RUN_PC "x11"
+
+#define REG_NEXT_BASE "x12"
+#define REG_NEXT_IDX "x13"
+#define REG_HIST_BASE "x14"
 
 #define REG_SP 31
 
@@ -57,14 +68,66 @@ int insert(arm_program_t *prog, arm_inst_t inst) {
 void vm2arm(vm_program_t *vp, arm_program_t *ap) {
     FILE *f = ap->f;
 
+    int N = vp->insts_length;
+    int sp_sub = 16 + 3 * 8 * N;
+    
+    sp_sub = sp_sub + (16 - (sp_sub % 16)); // 16 byte aligned stack pointer
+
     fprintf(f, "_matchit:\n");
 
-    fprintf(f, "sub sp, sp, #64\n");
-    fprintf(f, "stp x29, x30, [sp, #48]\n");
+    fprintf(f, "sub sp, sp, #%d\n", sp_sub);
+    fprintf(f, "stp x29, x30, [sp, #%d]\n", sp_sub - 16);
 
-    fprintf(f, "mov x10, x0\n");
-    fprintf(f, "mov x11, #0\n");
-    fprintf(f, "mov x15, sp\n"); // thread stack
+    fprintf(f, "mov " REG_SPTR ", x0\n");
+    fprintf(f, "mov " REG_SIDX ", #0\n");
+    fprintf(f, "mov " REG_CURR_BASE ", sp\n" );
+    fprintf(f, "mov " REG_CURR_IDX ", #0\n");
+    fprintf(f, "mov " REG_CURR_LEN ", #1\n");
+    fprintf(f, "mov " REG_NEXT_BASE ", sp\n");
+    fprintf(f, "add " REG_NEXT_BASE ", " REG_NEXT_BASE ", #%d\n", 8*N);
+    fprintf(f, "mov " REG_NEXT_IDX ", #0\n");
+    fprintf(f, "mov " REG_HIST_BASE ", sp\n");
+    fprintf(f, "add " REG_HIST_BASE ", " REG_HIST_BASE ", #%d\n", 2*8*N);
+
+    fprintf(f, "mov " REG_TMP ", #0\n");
+    fprintf(f, "zero_hist_loop:\n");
+    fprintf(f, "mov " REG_TMP2 ", #-1\n");
+    fprintf(f, "str " REG_TMP2 ", [" REG_HIST_BASE ", " REG_TMP ", sxtx #3]\n");
+    fprintf(f, "add " REG_TMP ", " REG_TMP ", #1\n");
+    fprintf(f, "cmp " REG_TMP ", #%d\n", N);
+    fprintf(f, "b.lt zero_hist_loop\n");
+
+    fprintf(f, "adr " REG_TMP ", bytecode_inst_0\n");
+    fprintf(f, "str " REG_TMP ", [" REG_CURR_BASE "]\n");
+
+
+    fprintf(f, "the_loop:\n");
+    fprintf(f, "ldrb " REGW_CHAR ", [" REG_SPTR ", " REG_SIDX "]\n");
+
+    fprintf(f, "cmp " REG_CURR_LEN ", #0\n");
+    fprintf(f, "mov x0, #0\n");
+    fprintf(f, "b.eq FIN\n");
+    fprintf(f, "loop_inner:\n");
+    fprintf(f, "ldr " REG_RUN_PC ", [" REG_CURR_BASE ", " REG_CURR_IDX ", sxtx #3]\n");
+    fprintf(f, "br " REG_RUN_PC "\n");
+    fprintf(f, "bytecode_instr_done:\n");
+    fprintf(f, "add " REG_CURR_IDX ", " REG_CURR_IDX ", #1\n");
+    fprintf(f, "cmp " REG_CURR_IDX ", " REG_CURR_LEN "\n");
+    fprintf(f, "b.lt loop_inner\n");
+    // loop is over, swap stuff
+    fprintf(f, "mov " REG_TMP ", " REG_CURR_BASE "\n");
+    fprintf(f, "mov " REG_CURR_BASE ", " REG_NEXT_BASE "\n");
+    fprintf(f, "mov " REG_NEXT_BASE ", " REG_TMP "\n");
+
+    fprintf(f, "mov " REG_CURR_IDX ", #0\n");
+    fprintf(f, "mov " REG_CURR_LEN ", " REG_NEXT_IDX "\n");
+    fprintf(f, "mov " REG_NEXT_IDX ", #0\n");
+
+    fprintf(f, "add " REG_SIDX ", " REG_SIDX ", #1\n");
+    fprintf(f, "cmp " REG_CHAR ", #0\n");
+    fprintf(f, "b.ne the_loop\n");
+
+    fprintf(f, "b FIN\n");
 
     for (int idx = 0; idx < vp->insts_length; idx++) {
         vm_inst_t vi = vp->insts[idx];
@@ -74,24 +137,66 @@ void vm2arm(vm_program_t *vp, arm_program_t *ap) {
                 fprintf(f, "RL_%d:\n", label_idx);
             }
         }
+        fprintf(f, "bytecode_inst_%d:\n", idx);
 
         if (vi.op == OP_LITERAL) {
             char chr = vi.literal.str[0];
-            fprintf(f, "ldrb w9, [x10, x11]\n");
-            fprintf(f, "subs x9, x9, #%d\n", (int) chr);
-            fprintf(f, "b.ne NOMATCH\n");
-            fprintf(f, "add x11, x11, #1\n");
+            // assume char is already loaded
+            //fprintf(f, "ldrb " REGW_CHAR ", [" REG_SPTR ", " REG_SIDX "]\n");
+            fprintf(f, "cmp " REG_CHAR ", #%d\n", (int) chr);
+            fprintf(f, "b.ne bytecode_instr_done\n");
+            fprintf(f, "ldrh " REGW_TMP ", [" REG_HIST_BASE ", #%d]\n", idx*8 + 4);
+            fprintf(f, "cmp " REG_TMP ", " REG_SIDX "\n");
+            fprintf(f, "b.eq bytecode_instr_done\n"); // this was already on the stack
+            // or make these conditional instead of branching?
+            fprintf(f, "strh " REGW_SIDX ", [" REG_HIST_BASE ", #%d]\n", idx*8 + 4);
+            fprintf(f, "adr " REG_TMP ", bytecode_inst_%d\n", idx+1);
+            fprintf(f, "str " REG_TMP ", [" REG_NEXT_BASE ", " REG_NEXT_IDX ", sxtx #3]\n");
+            fprintf(f, "add " REG_NEXT_IDX ", " REG_NEXT_IDX ", #1\n");
+            fprintf(f, "b bytecode_instr_done\n");
 
         } else if (vi.op == OP_MATCH) {
-            fprintf(f, "ldrb w9, [x10, x11]\n");
-            fprintf(f, "cbz w9, MATCH\n");
-            fprintf(f, "b NOMATCH\n");
+            fprintf(f, "cbz " REGW_CHAR ", MATCH\n");
+            fprintf(f, "b bytecode_instr_done\n");
+
         } else if (vi.op == OP_JMP) {
-            fprintf(f, "b RL_%d\n", vi.jmp_label);
+            int jmp_pc = vp->label_table[vi.jmp_label];
+
+            fprintf(f, "ldrh " REGW_TMP ", [" REG_HIST_BASE ", #%d]\n", jmp_pc*8);
+            fprintf(f, "cmp " REG_TMP ", " REG_SIDX "\n");
+            fprintf(f, "b.eq bytecode_instr_done\n"); // this was already on the stack
+            // or make these conditional instead of branching?
+            fprintf(f, "strh " REGW_SIDX ", [" REG_HIST_BASE ", #%d]\n", jmp_pc*8);
+            fprintf(f, "adr " REG_TMP ", bytecode_inst_%d\n", jmp_pc);
+            fprintf(f, "str " REG_TMP ", [" REG_CURR_BASE ", " REG_CURR_LEN ", sxtx #3]\n");
+            fprintf(f, "add " REG_CURR_LEN ", " REG_CURR_LEN ", #1\n");
+            fprintf(f, "b bytecode_instr_done\n");
+
+
         } else if (vi.op == OP_SPLIT) {
-            fprintf(f, "adr x13, RL_%d\n", vi.split.label_1);
-            fprintf(f, "adr x14, RL_%d\n", vi.split.label_2);
-            fprintf(f, "b AddAThread\n");
+            int pc1 = vp->label_table[vi.split.label_1];
+            int pc2 = vp->label_table[vi.split.label_2];
+
+            fprintf(f, "ldrh " REGW_TMP ", [" REG_HIST_BASE ", #%d]\n", pc1*8);
+            fprintf(f, "cmp " REG_TMP ", " REG_SIDX "\n");
+            fprintf(f, "b.eq split_part2_for_%d\n", idx); // this was already on the stack
+            // or make these conditional instead of branching?
+            fprintf(f, "strh " REGW_SIDX ", [" REG_HIST_BASE ", #%d]\n", pc1*8);
+            fprintf(f, "adr " REG_TMP ", bytecode_inst_%d\n", pc1);
+            fprintf(f, "str " REG_TMP ", [" REG_CURR_BASE ", " REG_CURR_LEN ", sxtx #3]\n");
+            fprintf(f, "add " REG_CURR_LEN ", " REG_CURR_LEN ", #1\n");
+
+            fprintf(f, "split_part2_for_%d:\n", idx);
+
+            fprintf(f, "ldrh " REGW_TMP ", [" REG_HIST_BASE ", #%d]\n", pc2*8);
+            fprintf(f, "cmp " REG_TMP ", " REG_SIDX "\n");
+            fprintf(f, "b.eq bytecode_instr_done\n"); // this was already on the stack
+            // or make these conditional instead of branching?
+            fprintf(f, "strh " REGW_SIDX ", [" REG_HIST_BASE ", #%d]\n", pc2*8);
+            fprintf(f, "adr " REG_TMP ", bytecode_inst_%d\n", pc2);
+            fprintf(f, "str " REG_TMP ", [" REG_CURR_BASE ", " REG_CURR_LEN ", sxtx #3]\n");
+            fprintf(f, "add " REG_CURR_LEN ", " REG_CURR_LEN ", #1\n");
+            fprintf(f, "b bytecode_instr_done\n");
 
         } else {
             printf("Unsupported\n");
@@ -99,29 +204,12 @@ void vm2arm(vm_program_t *vp, arm_program_t *ap) {
         }
     }
 
-    fprintf(f, "AddAThread:\n");
-    fprintf(f, "sub x15, x15, #16\n");
-    fprintf(f, "stp x14, x11, [x15]\n");
-    fprintf(f, "br x13\n");
-
-    fprintf(f, "RunAThread:\n");
-    fprintf(f, "ldp x14, x11, [x15]\n");
-    fprintf(f, "add x15, x15, #16\n");
-    fprintf(f, "br x14\n");
-
-    fprintf(f, "NOMATCH:\n");
-    fprintf(f, "cmp sp, x15\n");
-    fprintf(f, "b.ne RunAThread\n");
-    fprintf(f, "mov x12, #0\n");
-    fprintf(f, "b FIN\n");
-
     fprintf(f, "MATCH:\n");
-    fprintf(f, "mov x12, #1\n");
+    fprintf(f, "mov x0, #1\n");
     fprintf(f, "b FIN\n");
 
     fprintf(f, "FIN:\n");
-    fprintf(f, "ldp x29, x30, [sp, #48]\n");
-    fprintf(f, "add sp, sp, #64\n");
-    fprintf(f, "mov x0, x12\n");
+    fprintf(f, "ldp x29, x30, [sp, #%d]\n", sp_sub - 16);
+    fprintf(f, "add sp, sp, #%d\n", sp_sub);
     fprintf(f, "ret\n");
 }
