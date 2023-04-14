@@ -2,7 +2,13 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include <errno.h>
 #include <ctype.h>
+
+#include <sys/mman.h>
+#include <pthread.h>
+#include <libkern/OSCacheControl.h>
 
 regex_node_t *regex_node_allocate(regex_node_tag_t tag) {
     regex_node_t *node = (regex_node_t *) malloc(sizeof(regex_node_t));
@@ -156,10 +162,6 @@ regex_node_t *collapse_alts(regex_node_t *node) {
     return NULL;
 }
 
-match_fn_t regex_compile(const char *pattern) {
-    return NULL;
-}
-
 int create_label(vm_program_t *prog, int offset) {
     int label = prog->current_label;
     prog->current_label++;
@@ -286,6 +288,50 @@ vm_program_t *regex_compile_bytecode(const char *pattern) {
     return prog;
 }
 
+match_fn_t regex_compile_jit(vm_program_t *prog) {
+    arm_program_t arm;
+    arm.index = 0;
+
+    arm.f = fopen("asm/foo.s", "w");
+    vm2arm(prog, &arm);
+    fclose(arm.f);
+
+    // assemble the code
+    system("clang asm/foo.s -c -o asm/foo.o");
+    // dump the code
+    system("otool -tX asm/foo.o > asm/foo.txt");
+
+    FILE *text = fopen("asm/foo.txt", "r");
+
+    uint32_t *data = executable_mem(4096);
+    pthread_jit_write_protect_np(false);
+    sys_icache_invalidate(data, 4096);
+
+    int addr = 0;
+    uint64_t _unused;
+    uint32_t b1, b2, b3, b4;
+    int nret;
+    while ((nret = fscanf(text, "%llx %x %x %x %x\n", &_unused, &b1, &b2, &b3, &b4)) > 1) {
+        if (nret >= 2) data[addr++] = b1;
+        if (nret >= 3) data[addr++] = b2;
+        if (nret >= 4) data[addr++] = b3;
+        if (nret >= 5) data[addr++] = b4;
+    }
+    fclose(text);
+
+    pthread_jit_write_protect_np(true);
+    sys_icache_invalidate(data, 4096);
+
+    match_fn_t fn = (match_fn_t) data;
+    return fn;
+}
+
+match_fn_t regex_compile(const char *pattern) {
+    vm_program_t *prog = regex_compile_bytecode(pattern);
+    match_fn_t fn = regex_compile_jit(prog);
+    return fn;
+}
+
 void test(const char *pattern) {
     printf("Test pattern: %s\n", pattern);
     
@@ -300,15 +346,6 @@ void test(const char *pattern) {
     printf("\n");
     print_node_tree(node, 0);
 }
-
-#include <sys/mman.h>
-#include <string.h>
-#include <errno.h>
-
-#include <pthread.h>
-#include <libkern/OSCacheControl.h>
-
-typedef bool (*jitfunc)(const char *str);
 
 int main(int argc, char **argv) {
     test("");
@@ -325,46 +362,9 @@ int main(int argc, char **argv) {
     test("123(abcd+)");
     test("(hello(xyz)world)");
 
-    vm_program_t *prog = regex_compile_bytecode("(hello|world)+(1|2)*");
-    print_program(prog);
+    match_fn_t fn = regex_compile("(hello|world)+(1|2)*");
 
-    arm_program_t arm;
-    arm.index = 0;
-
-    arm.f = fopen("asm/foo.s", "w");
-    vm2arm(prog, &arm);
-    fclose(arm.f);
-
-    system("clang asm/foo.s -c -o asm/foo.o");
-    system("otool -tX asm/foo.o > asm/foo.txt");
-
-    FILE *text = fopen("asm/foo.txt", "r");
-
-    uint32_t *data = executable_mem(4096);
-
-    pthread_jit_write_protect_np(0);
-    sys_icache_invalidate(data, 4096);
-
-    int addr = 0;
-    uint64_t saddr;
-    uint32_t b1, b2, b3, b4;
-    int res;
-    while ((res = fscanf(text, "%llx %x %x %x %x\n", &saddr, &b1, &b2, &b3, &b4)) > 1) {
-        if (res >= 2) data[addr++] = b1;
-        if (res >= 3) data[addr++] = b2;
-        if (res >= 4) data[addr++] = b3;
-        if (res >= 5) data[addr++] = b4;
-    }
-
-    printf("the first %x\n", data[0]);
-    printf("the last %x\n", data[addr - 1]);
-
-    pthread_jit_write_protect_np(1);
-    sys_icache_invalidate(data, 4096);
-
-    jitfunc fn = (jitfunc) data;
-
-    const char *pp = "hellohelloworldworld1111221212221";
+    const char *pp = "hellohelloworldworldhello1111221212221";
     bool answer = fn(pp);
 
     printf("drumroll... %d\n", answer);
