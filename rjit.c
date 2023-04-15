@@ -10,6 +10,8 @@
 #include <pthread.h>
 #include <libkern/OSCacheControl.h>
 
+#include <re2/re2.h>
+
 regex_node_t *regex_node_allocate(regex_node_tag_t tag) {
     regex_node_t *node = (regex_node_t *) malloc(sizeof(regex_node_t));
     node->tag = tag;
@@ -273,12 +275,12 @@ vm_program_t *regex_compile_bytecode(const char *pattern) {
     const char *input = pattern;
     regex_node_t *node = regex_parse(&input);
 
-    vm_program_t *prog = malloc(sizeof(vm_program_t));
+    vm_program_t *prog = (vm_program_t*) malloc(sizeof(vm_program_t));
     prog->insts_capacity = 1000;
     prog->insts_length = 0;
-    prog->insts = malloc(prog->insts_capacity * sizeof(vm_inst_t));
+    prog->insts = (vm_inst_t*) malloc(prog->insts_capacity * sizeof(vm_inst_t));
 
-    prog->label_table = malloc(prog->insts_capacity * sizeof(int));
+    prog->label_table = (int*) malloc(prog->insts_capacity * sizeof(int));
     prog->current_label = 0;
 
     emit_node(prog, node);
@@ -303,7 +305,7 @@ match_fn_t regex_compile_jit(vm_program_t *prog) {
 
     FILE *text = fopen("asm/foo.txt", "r");
 
-    uint32_t *data = executable_mem(4096);
+    uint32_t *data = (uint32_t*) executable_mem(4096);
     pthread_jit_write_protect_np(false);
     sys_icache_invalidate(data, 4096);
 
@@ -347,6 +349,76 @@ void test(const char *pattern) {
     print_node_tree(node, 0);
 }
 
+#include <time.h>
+
+void benchmark() {
+    const char *pattern = "(hello|world(0|1|2|3)?)+";
+
+    int len = 50 * 1000 * 1024;
+    char *str = (char*) malloc(len);
+    memset(str, '\0', len);
+
+    int ctr = 0;
+    for (int i = 0; i < len-100; ) {
+        ctr++;
+        if ((ctr & 1) == 1) {
+            memcpy(str + i, "hello", 5);
+            i += 5;
+        } else {
+            memcpy(str + i, "world", 5);
+            str[i+5] = '0' + (ctr/2 % 4);
+            i += 6;
+        }
+    }
+
+    printf("the string: %.*s\n", 100, str);
+
+    vm_program_t *prog = regex_compile_bytecode(pattern);
+
+    double total = 0;
+    int niters = 20;
+    for (int iter = 0; iter < niters; iter++) {
+        double start = (double) clock() / CLOCKS_PER_SEC;
+        vm_run(prog, str);
+        double end = (double) clock() / CLOCKS_PER_SEC;
+
+        total += (end - start);
+    }
+
+    printf("Total %f, avg %f\n", total, total / niters);
+
+    printf("result ::: %d\n", vm_run(prog, str));
+
+    match_fn_t fn = regex_compile(pattern);
+    printf("result ::: %d\n", fn(str));
+
+    total = 0;
+    for (int iter = 0; iter < niters; iter++) {
+        double start = (double) clock() / CLOCKS_PER_SEC;
+        fn(str);
+        double end = (double) clock() / CLOCKS_PER_SEC;
+
+        total += (end - start);
+    }
+
+    printf("Total %f, avg %f\n", total, total / niters);
+
+    re2::RE2 re(pattern);
+
+    total = 0;
+    for (int iter = 0; iter < niters; iter++) {
+        double start = (double) clock() / CLOCKS_PER_SEC;
+        re2::RE2::FullMatch(str, re);
+        double end = (double) clock() / CLOCKS_PER_SEC;
+
+        total += (end - start);
+    }
+
+    printf("Total %f, avg %f\n", total, total / niters);
+
+
+}
+
 int main(int argc, char **argv) {
     test("");
     test("123");
@@ -362,12 +434,20 @@ int main(int argc, char **argv) {
     test("123(abcd+)");
     test("(hello(xyz)world)");
 
-    match_fn_t fn = regex_compile(".*(hello|world).*");
+    const char *pattern = "(hello|world(0|1|2|3)?)+";
+    match_fn_t fn = regex_compile(pattern);
 
-    const char *pp = "xyxyxyxhelloworldhelloabababa";
+    const char *pp = "hellohellohelloworld3";
     bool answer = fn(pp);
-
     printf("drumroll... %d\n", answer);
+
+    vm_program_t *prog = regex_compile_bytecode(pattern);
+    //print_program(prog);
+
+    bool vm_ans = vm_run(prog, pp);
+    printf("vm ans: %d\n", vm_ans);
+
+    benchmark();
 
     return 0;
 }

@@ -13,7 +13,7 @@ typedef struct {
 bool vm_run1(vm_program_t *prog, const char *str) {
     vm_thread_t thr = {.pc = 0, .idx = 0};
 
-    vm_thread_t *stack = malloc(4096 * sizeof(vm_thread_t));
+    vm_thread_t *stack = (vm_thread_t*) malloc(4096 * sizeof(vm_thread_t));
     int stackpos = 0;
     int stackmax = 0;
 
@@ -68,7 +68,7 @@ bool vm_run2(vm_program_t *prog, const char *str) {
     vm_thread_t thr = {.pc = 0, .idx = 0};
 
     const int sz = 15;
-    vm_thread_t *stack = malloc(sz * sizeof(vm_thread_t));
+    vm_thread_t *stack = (vm_thread_t*) malloc(sz * sizeof(vm_thread_t));
     int stackstart = 0, stackend = 0;
 
     int stackmax = 0;
@@ -132,6 +132,90 @@ bool vm_run2(vm_program_t *prog, const char *str) {
     return false;
 }
 
+// thompson
+bool vm_run3(vm_program_t *prog, const char *str) {
+    int N = prog->insts_length;
+
+    int histc[N];
+    int histn[N];
+
+    for (int i = 0; i < N; i++)
+        histc[i] = histn[i] = -1;
+
+    int buf1[N];
+    int buf2[N];
+
+    int *curr = buf1, *next = buf2;
+
+    int currlen = 1;
+    int nextidx = 0;
+    curr[0] = 0;
+
+    int g = 0;
+    for (const char *sp = str; ; sp++, g++) {
+        if (currlen == 0) return false;
+
+        char c = *sp;
+        for (int i = 0; i < currlen; i++) {
+            int pc1, pc2;
+            int idx = curr[i];
+            vm_inst_t inst = prog->insts[idx];
+            switch (inst.op) {
+            case OP_LITERAL:
+                if (*inst.literal.str == c) {
+                    if (histn[idx+1] != g) {
+                        next[nextidx++] = idx+1;
+                        histn[idx+1] = g;
+                    }
+                }
+                break;
+
+            case OP_ANY:
+                if (histn[idx+1] != g) {
+                    next[nextidx++] = idx+1;
+                    histn[idx+1] = g;
+                }
+                break;
+
+            case OP_MATCH:
+                if (c == '\0') return true;
+
+            case OP_JMP:
+                pc1 = prog->label_table[inst.jmp_label];
+                if (histc[pc1] != g) {
+                    curr[currlen++] = pc1;
+                    histc[pc1] = g;
+                }
+                break;
+
+            case OP_SPLIT:
+                pc1 = prog->label_table[inst.split.label_1];
+                pc2 = prog->label_table[inst.split.label_2];
+                if (histc[pc1] != g) {
+                    curr[currlen++] = pc1;
+                    histc[pc1] = g;
+                }
+                if (histc[pc2] != g) {
+                    curr[currlen++] = pc2;
+                    histc[pc2] = g;
+                }
+                break;
+            }
+        }
+
+        int *tmp = next;
+        next = curr;
+        curr = tmp;
+
+        currlen = nextidx;
+        nextidx = 0;
+
+        if (c == '\0') break;
+    }
+
+    return false;
+}
+
 bool vm_run(vm_program_t *prog, const char *str) {
-    return vm_run2(prog, str);
+    return vm_run3(prog, str);
 }
